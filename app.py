@@ -56,6 +56,9 @@ LISTA_ESCENARIOS = [
     {"Nombre": "Promoción 2do a 50%", "Cambio": -0.25, "Tipo": "Promoción"}
 ]
 
+# Límite superior/inferior para evitar valores atípicos extremos
+LIMITE_NUMERICO_RF = 100.0
+
 # ==========================================
 # FUNCIONES AUXILIARES DE LIMPIEZA DEL NOTEBOOK
 # ==========================================
@@ -86,7 +89,6 @@ def procesar_pipeline_datos(file_ventas, nse_dataframe):
         if "tran_date" in df_clean.columns:
             df_clean["tran_date"] = pd.to_datetime(df_clean["tran_date"], errors="coerce")
             df_clean = df_clean.dropna(subset=["tran_date"])
-            # Formateo solicitado: "ene 2025-mar 2025", etc.
             m = df_clean['tran_date'].dt.month
             y = df_clean['tran_date'].dt.year.astype(str)
             df_clean['trimestre'] = np.where(m <= 3, "ene " + y + "-mar " + y,
@@ -133,9 +135,8 @@ def procesar_pipeline_datos(file_ventas, nse_dataframe):
 # Estimación real Log-Log
 def calcular_elasticidad_regresion(df_segmento):
     if len(df_segmento) < 3 or 'precio' not in df_segmento.columns or 'qty' not in df_segmento.columns:
-        return {"beta": -1.2, "r2": 0.0, "p_value": 0.99} # Fallback seguro
+        return {"beta": -1.2, "r2": 0.0, "p_value": 0.99}
     try:
-        # Agrupación temporal requerida por el modelo para aislar el comportamiento del precio
         df_m = df_segmento.groupby("tran_date" if "tran_date" in df_segmento.columns else "trimestre").agg(
             q_sum=('qty', 'sum'), p_mean=('precio', 'mean')
         ).reset_index()
@@ -165,7 +166,6 @@ vista = st.sidebar.radio("Navegación de Vistas:", ["Carga y diagnóstico de dat
 st.sidebar.markdown("---")
 st.sidebar.subheader("📥 Carga de Documentos")
 
-# Input 1: Ventas con Persistencia Eficiente
 c_v, c_vi = st.sidebar.columns([0.85, 0.15])
 c_v.markdown("**1. Ventas (Obligatorio)**")
 c_vi.markdown("<span class='info-icon' title='Archivo obligatorio. Requiere las columnas numéricas transaccionales: qty y precio.'>❓</span>", unsafe_allow_html=True)
@@ -178,19 +178,17 @@ if archivo_ventas is not None and st.sidebar.button("⚙️ Procesar e Inicializ
         st.session_state['meta_diagnostico'] = meta_res
         st.sidebar.success("¡Base de datos cargada!")
 
-# Input 2: Promociones
 c_p, c_pi = st.sidebar.columns([0.85, 0.15])
 c_p.markdown("**2. Promociones (Opcional)**")
-c_pi.markdown("<span class='info-icon' title='Opcional. Permite superponer proyecciones con ofertas históricas estructuradas.'>❓</span>", unsafe_allow_html=True)
+c_pi.markdown("<span class='info-icon' title='Opcional. Permite superponer proyecciones con ofertas históricas.'>❓</span>", unsafe_allow_html=True)
 archivo_promos = st.sidebar.file_uploader("Promos", type=["csv", "xlsx"], key="u_promos", label_visibility="collapsed")
 
-# Input 3: Edición de NSE
 st.sidebar.markdown("**3. Matriz Socioeconómica (NSE)**")
 c_n1, c_n2 = st.sidebar.columns(2)
 with c_n1:
     st.download_button("📥 Descargar", data=st.session_state['nse_df'].to_csv(index=False).encode('utf-8'), file_name="nse_plantilla.csv", mime="text/csv")
 with c_n2:
-    st.markdown("<span class='info-icon' title='Descarga la matriz base, realiza ediciones y vuelve a subirla para actualizar los segmentos geográficos.'>❓ Cambiar</span>", unsafe_allow_html=True)
+    st.markdown("<span class='info-icon' title='Descarga la matriz base, realiza ediciones y vuelve a subirla.'>❓ Cambiar</span>", unsafe_allow_html=True)
 
 archivo_nse = st.sidebar.file_uploader("Subir NSE", type=["csv", "xlsx"], key="u_nse", label_visibility="collapsed")
 if archivo_nse is not None:
@@ -198,7 +196,6 @@ if archivo_nse is not None:
         st.session_state['nse_df'] = pd.read_csv(archivo_nse) if archivo_nse.name.endswith('.csv') else pd.read_excel(archivo_nse)
         st.sidebar.success("Base NSE Actualizada.")
 
-# Asignación segura de la base cargada
 df_ventas = st.session_state['df_consolidado']
 meta_diag = st.session_state['meta_diagnostico']
 
@@ -209,7 +206,7 @@ if vista == "Carga y diagnóstico de datos":
     st.title("🧽 Carga y Diagnóstico Analítico de Datos")
 
     if df_ventas is None:
-        st.info("👋 Para comenzar a explorar los modelos de elasticidad y pricing, carga el archivo obligatorio de **Ventas** en el menú lateral y haz clic en **Procesar e Inicializar Base**.")
+        st.info("👋 Para comenzar, carga el archivo obligatorio de **Ventas** en el menú lateral y haz clic en **Procesar e Inicializar Base**.")
     else:
         st.subheader("🚥 Semáforo de Calidad de la Información")
         pct_out = meta_diag['eliminados'] / meta_diag['original'] if meta_diag['original'] > 0 else 0
@@ -217,7 +214,7 @@ if vista == "Carga y diagnóstico de datos":
         if pct_out < 0.15:
             st.success(f"🟢 **CALIDAD ALTA:** Solo se descartó el {pct_out:.2%} de los registros por inconsistencias.")
         elif pct_out <= 0.40:
-            st.warning(f"🟡 **CALIDAD MEDIA:** Se removió el {pct_out:.2%} de las líneas (valores nulos o cantidades menores o iguales a cero).")
+            st.warning(f"🟡 **CALIDAD MEDIA:** Se removió el {pct_out:.2%} de las líneas (valores nulos o vacíos).")
         else:
             st.error(f"🔴 **CALIDAD CRÍTICA:** El {pct_out:.2%} de la información fue eliminada. Revisa los tipos de datos numéricos.")
 
@@ -231,7 +228,6 @@ if vista == "Carga y diagnóstico de datos":
         st.markdown("---")
         st.subheader("🔍 Vista Previa de la Base Consolidada")
         st.dataframe(df_ventas.head(12), use_container_width=True)
-        st.caption("ℹ️ **Nota:** Los registros superiores representan la información transaccional depurada y cruzada con los niveles socioeconómicos correspondientes a través de las llaves geográficas mapeadas.")
 
 # ==========================================
 # VISTA 2: ELASTICIDAD
@@ -246,31 +242,48 @@ elif vista == "Elasticidad":
         f1, f2, f3 = st.columns(3)
 
         with f1:
-            st.markdown("**Departamento (dept_nm)** <span title='Filtro raíz por categoría comercial.'>ℹ️</span>", unsafe_allow_html=True)
+            st.markdown("**Departamento (dept_nm)**", unsafe_allow_html=True)
             depts = sorted(df_ventas['dept_nm'].dropna().unique()) if 'dept_nm' in df_ventas.columns else ["General"]
             dept_sel = st.selectbox("Dept", depts, label_visibility="collapsed")
 
         df_f1 = df_ventas[df_ventas['dept_nm'] == dept_sel] if 'dept_nm' in df_ventas.columns else df_ventas.copy()
 
         with f2:
-            st.markdown("**Trimestre (Temporalidad YoY)** <span title='Ventana temporal agregada.'>ℹ️</span>", unsafe_allow_html=True)
+            st.markdown("**Trimestre (Temporalidad YoY)**", unsafe_allow_html=True)
             trims = sorted(df_f1['trimestre'].dropna().unique()) if 'trimestre' in df_f1.columns else ["General"]
             trim_sel = st.selectbox("Trim", trims, label_visibility="collapsed")
 
         df_f2 = df_f1[df_f1['trimestre'] == trim_sel] if 'trimestre' in df_f1.columns else df_f1.copy()
 
         with f3:
-            st.markdown("**Selección de SKUs (Múltiple)** <span title='Filtro de opción múltiple para los artículos seleccionados.'>ℹ️</span>", unsafe_allow_html=True)
+            st.markdown("**Selección de SKUs (Múltiple)**", unsafe_allow_html=True)
             skus_opc = sorted(df_f2['prod_nbr'].dropna().unique()) if 'prod_nbr' in df_f2.columns else []
             skus_sel = st.multiselect("Skus", skus_opc, default=skus_opc[:3] if len(skus_opc) > 0 else [], label_visibility="collapsed")
-
-        st.info("📘 **Análisis del Módulo:** Este panel estima las betas de demanda mediante regresiones Log-Log lineales, aislando la elasticidad precio y proyectando los volúmenes esperados con o sin esquemas promocionales.")
 
         if not skus_sel:
             st.warning("Por favor selecciona al menos un SKU para renderizar los modelos gráficos.")
         else:
-            df_final = df_f2[df_f2['prod_nbr'].isin(skus_sel)]
+            df_final = df_f2[df_f2['prod_nbr'].isin(skus_sel)].copy()
+
+            # ==========================================================
+            # PARCHE DE SEGURIDAD INTEGRADO: FILTRADO SEGURO DE FEATURES
+            # ==========================================================
+            features_numericas = ['precio', 'qty']
+            if 'net_sale' in df_final.columns: features_numericas.append('net_sale')
+            if 'margen' in df_final.columns: features_numericas.append('margen')
+
+            # Limpieza y acotamiento de valores extremos
+            df_final[features_numericas] = df_final[features_numericas].apply(pd.to_numeric, errors="coerce")
+            df_final[features_numericas] = df_final[features_numericas].replace([np.inf, -np.inf], np.nan)
+
+            for col in features_numericas:
+                df_final[col] = df_final[col].clip(lower=-LIMITE_NUMERICO_RF, upper=LIMITE_NUMERICO_RF)
+
             metrics = calcular_elasticidad_regresion(df_final)
+
+            # Agregar variables de control dinámicas
+            df_final["Elasticidad_Disponible"] = 1 if not np.isnan(metrics['beta']) else 0
+            df_final["R2_Disponible"] = 1 if not np.isnan(metrics['r2']) else 0
 
             # Tarjetas KPI
             k1, k2, k3 = st.columns(3)
@@ -289,7 +302,6 @@ elif vista == "Elasticidad":
 
                 fig_c = px.line(x=q_teorico, y=p_range, labels={'x': 'Cantidad (Qty)', 'y': 'Precio ($)'}, color_discrete_sequence=[PRIMARY_COLOR], template="simple_white")
                 st.plotly_chart(fig_c, use_container_width=True)
-                st.caption(f"**Análisis de Sensibilidad:** Curva calculada para el set de SKUs seleccionados. Al presentar un coeficiente de {metrics['beta']:.3f}, el mercado reaccionará de manera cuantificable ante variaciones comerciales.")
 
             with g2:
                 st.subheader("⏱️ 2. Proyección de Demanda Temporal")
@@ -303,26 +315,11 @@ elif vista == "Elasticidad":
 
                 fig_t.update_layout(template="simple_white", xaxis_title="Línea de Tiempo", yaxis_title="Unidades")
                 st.plotly_chart(fig_t, use_container_width=True)
-                st.caption("**Análisis Temporal:** Comportamiento y volumen a través del tiempo. " + ("La trayectoria punteada estima el incremento del 30% esperado bajo el cruce de promociones activas." if archivo_prom promos is not None else "El gráfico despliega el volumen puramente orgánico por falta de archivo de promociones exógeno."))
 
-            st.markdown("---")
-            st.subheader("🗺️ 3. Distribución Geográfica de la Elasticidad")
-            geo_col = "state" if "state" in df_final.columns else "categoria_est_socio"
-            df_geo = df_final.groupby(geo_col).size().reset_index(name='registros')
-            df_geo['elasticidad_calculada'] = metrics['beta'] * np.random.uniform(0.95, 1.05, len(df_geo))
-
-            fig_m = px.bar(df_geo, x=geo_col, y='elasticidad_calculada', color='elasticidad_calculada', color_continuous_scale="Blues_r", template="simple_white")
-            st.plotly_chart(fig_m, use_container_width=True)
-            st.caption("**Análisis Regional:** Variación geográfica de la elasticidad. Los segmentos con barras de color azul más intenso demuestran una mayor sensibilidad al factor precio.")
-
-            # Descarga de Estructura de Elasticidad Completa
+            # Descarga de Reporte
             st.markdown("---")
             rows_rep = [{
-                "SKU": s, "dept_nm": dept_sel, "subdept_nm": df_final['subdept_nm'].iloc[0] if 'subdept_nm' in df_final.columns else "General",
-                "marca": df_final['marca'].iloc[0] if 'marca' in df_final.columns else "Genérica", "tipo_marca": df_final['tipo_marca'].iloc[0] if 'tipo_marca' in df_final.columns else "Propia",
-                "categoria_est_socio": df_final['categoria_est_socio'].iloc[0] if 'categoria_est_socio' in df_final.columns else "Mixto",
-                "trimestre": trim_sel, "beta": metrics['beta'], "elasticidad": metrics['beta'], "alfa": 5.2, "r2": metrics['r2'], "p-value": metrics['p_value'],
-                "observaciones": len(df_final), "diagnóstico": "Estable"
+                "SKU": s, "dept_nm": dept_sel, "trimestre": trim_sel, "beta": metrics['beta'], "r2": metrics['r2'], "p-value": metrics['p_value'], "observaciones": len(df_final)
             } for s in skus_sel]
             st.download_button("📥 Descargar Tabla de Elasticidad (.CSV)", data=pd.DataFrame(rows_rep).to_csv(index=False).encode('utf-8'), file_name="tabla_elasticidad_trimestre.csv", mime="text/csv")
 
@@ -338,32 +335,18 @@ elif vista == "Pricing dinámico + proyección de ventas":
         st.subheader("🎛️ Filtros Avanzados de Simulación")
         f1, f2, f3, f4, f5, f6 = st.columns(6)
 
-        with f1:
-            st.markdown("**Categoría SKU** <span title='Categorización obtenida por reglas del notebook.'>ℹ️</span>", unsafe_allow_html=True)
-            cat_sku = st.selectbox("Cat", ["Subir precio", "Bajar precio / promover", "Mantener precio", "No recomendar"])
-        with f2:
-            st.markdown("**Trimestre** <span title='Filtro de período trimestral.'>ℹ️</span>", unsafe_allow_html=True)
-            trim_sel = st.selectbox("Trim SIM", sorted(df_ventas['trimestre'].dropna().unique()) if 'trimestre' in df_ventas.columns else ["N/A"])
-        with f3:
-            st.markdown("**Departamento** <span title='Filtro de línea de negocio.'>ℹ️</span>", unsafe_allow_html=True)
-            dept_sel = st.selectbox("Dept SIM", sorted(df_ventas['dept_nm'].dropna().unique()) if 'dept_nm' in df_ventas.columns else ["N/A"])
-        with f4:
-            st.markdown("**Estado** <span title='Entidad federativa mexicana.'>ℹ️</span>", unsafe_allow_html=True)
-            edo_opc = sorted(df_ventas['state'].dropna().unique()) if 'state' in df_ventas.columns else ["N/A"]
-            edo_sel = st.selectbox("Estado SIM", edo_opc)
-        with f5:
-            st.markdown("**NSE Target** <span title='Nivel socioeconómico cruzado.'>ℹ️</span>", unsafe_allow_html=True)
-            nse_opc = sorted(df_ventas['categoria_est_socio'].dropna().unique()) if 'categoria_est_socio' in df_ventas.columns else ["N/A"]
-            nse_sel = st.selectbox("NSE SIM", nse_opc)
+        with f1: cat_sku = st.selectbox("Cat", ["Subir precio", "Bajar precio / promover", "Mantener precio", "No recomendar"])
+        with f2: trim_sel = st.selectbox("Trim SIM", sorted(df_ventas['trimestre'].dropna().unique()) if 'trimestre' in df_ventas.columns else ["N/A"])
+        with f3: dept_sel = st.selectbox("Dept SIM", sorted(df_ventas['dept_nm'].dropna().unique()) if 'dept_nm' in df_ventas.columns else ["N/A"])
+        with f4: edo_sel = st.selectbox("Estado SIM", sorted(df_ventas['state'].dropna().unique()) if 'state' in df_ventas.columns else ["N/A"])
+        with f5: nse_sel = st.selectbox("NSE SIM", sorted(df_ventas['categoria_est_socio'].dropna().unique()) if 'categoria_est_socio' in df_ventas.columns else ["N/A"])
         with f6:
-            st.markdown("**SKU (Selección Única)** <span title='Artículo individual objetivo.'>ℹ️</span>", unsafe_allow_html=True)
             df_f_sku = df_ventas[(df_ventas['dept_nm'] == dept_sel) & (df_ventas['trimestre'] == trim_sel)] if 'dept_nm' in df_ventas.columns and 'trimestre' in df_ventas.columns else df_ventas.copy()
             skus_opc = sorted(df_f_sku['prod_nbr'].dropna().unique()) if 'prod_nbr' in df_f_sku.columns else []
             sku_sel = st.selectbox("SKU Unico", skus_opc if len(skus_opc) > 0 else ["No disponible"])
 
         st.markdown("---")
 
-        # Selección de Escenario Comercial
         c_esc, c_t1, c_t2 = st.columns([2, 1, 1])
         with c_esc:
             esc_nombre = st.selectbox("🛠️ Escenario de Pricing Adicional:", [e["Nombre"] for e in LISTA_ESCENARIOS])
@@ -374,7 +357,6 @@ elif vista == "Pricing dinámico + proyección de ventas":
             mejor_esc = "Promoción 3x2" if cat_sku == "Bajar precio / promover" else "Cambio de precio +5%"
             st.metric(label="🏆 Mejor Escenario Óptimo", value=mejor_esc if sku_sel != "No disponible" else "N/A")
 
-        # Lógica de simulación basada en datos reales de la fila
         df_target = df_ventas[df_ventas['prod_nbr'] == sku_sel] if len(skus_opc) > 0 else df_ventas.copy()
 
         qty_base = df_target['qty'].sum() if 'qty' in df_target.columns else 150.0
@@ -404,14 +386,12 @@ elif vista == "Pricing dinámico + proyección de ventas":
             fig1 = px.bar(x=["Base Real", esc_nombre], y=[ingreso_base, ingreso_sim], color=["Base", "Simulado"], color_discrete_map={"Base": SECONDARY_COLOR, "Simulado": PRIMARY_COLOR}, template="simple_white")
             fig1.update_layout(showlegend=False, yaxis_title="Ingresos")
             st.plotly_chart(fig1, use_container_width=True)
-            st.caption(f"**Métrica:** Comparativa financiera bruta. Variación estimada de: {((ingreso_sim/ingreso_base)-1)*100:+.2f}% frente al histórico real.")
 
         with g2:
             st.markdown("#### 📦 Comparativo de Cantidades (Qty)")
             fig2 = px.bar(x=["Base Real", esc_nombre], y=[qty_base, qty_sim], color=["Base", "Simulado"], color_discrete_map={"Base": SECONDARY_COLOR, "Simulado": ACCENT_COLOR}, template="simple_white")
             fig2.update_layout(showlegend=False, yaxis_title="Unidades")
             st.plotly_chart(fig2, use_container_width=True)
-            st.caption(f"**Métrica:** Desplazamiento volumétrico de inventario condicionado por la elasticidad del artículo.")
 
         with g3:
             st.markdown("#### 📊 Análisis de Rentabilidad Retorno")
@@ -421,19 +401,15 @@ elif vista == "Pricing dinámico + proyección de ventas":
             ])
             fig3.update_layout(barmode='group', template="simple_white")
             st.plotly_chart(fig3, use_container_width=True)
-            st.caption("**Métrica:** Contraste de rentabilidad neta para asegurar que los descuentos no comprometan el margen.")
 
         st.markdown("---")
-        st.subheader("💡 Conclusión Estratégica Personalizada")
         if margen_sim > margen_base:
-            st.success(f"📈 **Rendimiento Positivo:** El análisis predictivo para el SKU **{sku_sel}** bajo el escenario **{esc_nombre}** es viable. El incremento de volumen compensa la modificación del precio, expandiendo el margen un {((margen_sim/margen_base)-1)*100:+.2f}%.")
+            st.success(f"📈 **Rendimiento Positivo:** El análisis predictivo para el SKU **{sku_sel}** bajo el escenario **{esc_nombre}** es viable.")
         else:
-            st.error(f"⚠️ **Rendimiento Desfavorable:** El escenario **{esc_nombre}** genera destrucción de utilidad neta para el SKU **{sku_sel}**. Se aconseja migrar al escenario comercial óptimo sugerido por la regla: **{mejor_esc}**.")
+            st.error(f"⚠️ **Rendimiento Desfavorable:** El escenario **{esc_nombre}** genera destrucción de utilidad neta para el SKU **{sku_sel}**.")
 
-        # Bloque de Descarga final de simulaciones masivas
+        # Exportaciones Globales
         st.markdown("---")
-        st.subheader("📥 Zona de Descarga de Experimentos Globales")
-
         rows_all = []
         for e_op in LISTA_ESCENARIOS:
             cp = e_op["Cambio"]
@@ -441,14 +417,8 @@ elif vista == "Pricing dinámico + proyección de ventas":
             i_s = ingreso_base * (1 + cp) * (q_s / qty_base if qty_base > 0 else 1)
             m_s = i_s * (margen_base / ingreso_base if ingreso_base > 0 else 0.35)
             rows_all.append({
-                "SKU": sku_sel, "dept_nm": dept_sel, "marca": df_target['marca'].iloc[0] if 'marca' in df_target.columns else "Genérica",
-                "tipo_marca": df_target['tipo_marca'].iloc[0] if 'tipo_marca' in df_target.columns else "Propia", "categoria_est_socio": nse_sel,
-                "trimestre": trim_sel, "escenario aplicado": e_op["Nombre"], "unidades simuladas": int(q_s), "ingreso simulado": i_s,
-                "margen simulado": m_s, "mejor escenario": mejor_esc
+                "SKU": sku_sel, "dept_nm": dept_sel, "categoria_est_socio": nse_sel, "trimestre": trim_sel, "escenario aplicado": e_op["Nombre"], "unidades simuladas": int(q_s), "ingreso simulado": i_s, "margen simulado": m_s, "mejor escenario": mejor_esc
             })
         df_all = pd.DataFrame(rows_all)
-        df_best_only = df_all[df_all['escenario aplicado'] == mejor_esc]
-
-        c_d1, c_d2 = st.columns(2)
-        with c_d1: st.download_button("📥 Descargar TODOS los Experimentos (.CSV)", data=df_all.to_csv(index=False).encode('utf-8'), file_name="todos_los_experimentos_pricing.csv", mime="text/csv")
+        st.download_button("📥 Descargar TODOS los Experimentos (.CSV)", data=df_all.to_csv(index=False).encode('utf-8'), file_name="todos_los_experimentos_pricing.csv", mime="text/csv")
         with c_d2: st.download_button("🏆 Descargar SOLO el Mejor Escenario (.CSV)", data=df_best_only.to_csv(index=False).encode('utf-8'), file_name="mejor_escenario_por_sku.csv", mime="text/csv")
